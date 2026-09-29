@@ -1,0 +1,64 @@
+{
+  "objects": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "name": "argocd",
+      "deletionTimestamp": "2026-09-24T11:02:19Z",
+      "finalizers": ["resources-finalizer.argocd.argoproj.io"]
+    },
+    {
+      "apiVersion": "cert-manager.io/v1",
+      "kind": "Certificate",
+      "namespace": "app",
+      "name": "web-tls",
+      "deletionTimestamp": "2026-09-26T08:41:03Z",
+      "finalizers": ["finalizer.cert-manager.io"]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "namespace": "app",
+      "name": "data-0",
+      "deletionTimestamp": "2026-09-27T19:15:44Z",
+      "finalizers": ["kubernetes.io/pvc-protection"]
+    },
+    {
+      "apiVersion": "gcp.crossplane.io/v1beta1",
+      "kind": "Bucket",
+      "namespace": "app",
+      "name": "assets",
+      "deletionTimestamp": "2026-09-28T06:30:00Z",
+      "finalizers": ["finalizer.gcp.crossplane.io"]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "namespace": "app",
+      "name": "web",
+      "deletionTimestamp": "2026-09-22T14:07:51Z",
+      "finalizers": ["service.k8s.aws/resources"]
+    },
+    {
+      "apiVersion": "webhook.example.com/v1",
+      "kind": "ExternalScaler",
+      "namespace": "app",
+      "name": "scaler",
+      "deletionTimestamp": "2026-09-28T22:11:09Z",
+      "finalizers": ["webhook.example.com/cleanup"]
+    }
+  ],
+  "crds": [
+    { "name": "certificates.cert-manager.io", "group": "cert-manager.io" },
+    { "name": "buckets.gcp.crossplane.io", "group": "gcp.crossplane.io" }
+  ],
+  "apiServices": [
+    { "name": "v1beta1.metrics.k8s.io", "group": "metrics.k8s.io", "available": true },
+    { "name": "v1.webhook.example.com", "group": "webhook.example.com", "available": false }
+  ],
+  "deployments": [
+    { "namespace": "cert-manager", "name": "cert-manager", "replicas": 1, "readyReplicas": 0 },
+    { "namespace": "crossplane-system", "name": "crossplane-provider-gcp", "replicas": 1, "readyReplicas": 1 },
+    { "namespace": "kube-system", "name": "coredns", "replicas": 2, "readyReplicas": 2 }
+  ]
+}

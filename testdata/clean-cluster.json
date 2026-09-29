@@ -1,0 +1,8 @@
+{
+  "objects": [],
+  "crds": [{ "name": "certificates.cert-manager.io", "group": "cert-manager.io" }],
+  "apiServices": [{ "name": "v1beta1.metrics.k8s.io", "group": "metrics.k8s.io", "available": true }],
+  "deployments": [
+    { "namespace": "cert-manager", "name": "cert-manager", "replicas": 1, "readyReplicas": 1 }
+  ]
+}

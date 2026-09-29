@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [stable, oldstable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed for:"; echo "$unformatted"; exit 1
+          fi
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test -race -count=1 ./...
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - run: go build -o k8s-finalizer-doctor ./cmd/k8s-finalizer-doctor
+      - name: stuck snapshot exits 1 and names the finalizer
+        run: |
+          set +e
+          out=$(./k8s-finalizer-doctor --snapshot testdata/stuck-cluster.json)
+          code=$?
+          set -e
+          echo "$out"
+          [ "$code" = "1" ] || { echo "expected exit 1, got $code"; exit 1; }
+          echo "$out" | grep -q "owner-missing"
+          echo "$out" | grep -q "kubectl patch namespaces/argocd"
+      - name: clean snapshot exits 0
+        run: |
+          ./k8s-finalizer-doctor --snapshot testdata/clean-cluster.json
+      - name: json output parses
+        run: |
+          set +e
+          ./k8s-finalizer-doctor --snapshot testdata/stuck-cluster.json -o json > report.json
+          set -e
+          python3 -c "import json;d=json.load(open('report.json'));assert len(d['findings'])==6, d"

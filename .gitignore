@@ -1,0 +1,14 @@
+# Built binary, anchored to the repo root so it never shadows cmd/k8s-finalizer-doctor/.
+/k8s-finalizer-doctor
+/dist/
+/report.json
+/*.out
+/coverage.out
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
+
+# Fixtures are part of the tests and are always tracked.
+!testdata/**
