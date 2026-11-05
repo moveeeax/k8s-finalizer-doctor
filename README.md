@@ -1,7 +1,7 @@
 # k8s-finalizer-doctor
 
 [![ci](https://github.com/moveeeax/k8s-finalizer-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/moveeeax/k8s-finalizer-doctor/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 A namespace stuck `Terminating` for three days is always a finalizer nobody can
