@@ -62,3 +62,19 @@ func TestDumpWritesASnapshot(t *testing.T) {
 		t.Error("dump file is empty")
 	}
 }
+
+func TestOwnersFlag(t *testing.T) {
+	if got := run([]string{"--snapshot", "../../testdata/stuck-cluster.json", "--owners", "../../testdata/owners.yaml"}); got != 1 {
+		t.Errorf("exit = %d, want 1 with a valid owners file", got)
+	}
+	if got := run([]string{"--snapshot", "../../testdata/clean-cluster.json", "--owners", "../../testdata/nope.yaml"}); got != 2 {
+		t.Errorf("exit = %d, want 2 for a missing owners file", got)
+	}
+	bad := filepath.Join(t.TempDir(), "owners.yaml")
+	if err := os.WriteFile(bad, []byte("owners:\n  - finalizer: a.example.com\n    deployment: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := run([]string{"--snapshot", "../../testdata/clean-cluster.json", "--owners", bad}); got != 2 {
+		t.Errorf("exit = %d, want 2 for an owners file with an unknown key", got)
+	}
+}

@@ -28,6 +28,7 @@ Flags:
   -o, --output form      table (default) or json
       --snapshot file    read a snapshot instead of a cluster, for CI and postmortems
       --dump file        write the collected cluster state to file as a snapshot
+      --owners file      YAML map of finalizers to owner workloads, overriding the built-in catalog
       --kubeconfig path  explicit kubeconfig
       --context name     kubeconfig context to use
       --version          print version and exit
@@ -39,6 +40,7 @@ type options struct {
 	output        string
 	snapshot      string
 	dump          string
+	owners        string
 	kubeconfig    string
 	kubeContext   string
 	showVersion   bool
@@ -57,6 +59,7 @@ func parseFlags(args []string, stderr *os.File) (options, error) {
 	fs.StringVar(&o.output, "o", "table", "")
 	fs.StringVar(&o.snapshot, "snapshot", "", "")
 	fs.StringVar(&o.dump, "dump", "", "")
+	fs.StringVar(&o.owners, "owners", "", "")
 	fs.StringVar(&o.kubeconfig, "kubeconfig", "", "")
 	fs.StringVar(&o.kubeContext, "context", "", "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
@@ -84,6 +87,15 @@ func run(args []string) int {
 	if opts.showVersion {
 		fmt.Println("k8s-finalizer-doctor " + version)
 		return 0
+	}
+
+	var owners []scan.Owner
+	if opts.owners != "" {
+		owners, err = scan.LoadOwners(opts.owners)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 2
+		}
 	}
 
 	var snap scan.Snapshot
@@ -114,7 +126,7 @@ func run(args []string) int {
 		}
 	}
 
-	report := scan.Resolve(snap)
+	report := scan.ResolveWithOwners(snap, owners)
 	if opts.output == "json" {
 		err = scan.WriteJSON(os.Stdout, report)
 	} else {

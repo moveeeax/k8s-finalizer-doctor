@@ -36,6 +36,8 @@ var (
 	crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	apiGVR = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	stsGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
+	dsGVR  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}
 )
 
 // Client bundles the two clients the collector needs.
@@ -119,7 +121,7 @@ func (c *Client) Collect(ctx context.Context, namespace string) (scan.Snapshot, 
 
 	snap.CRDs = c.collectCRDs(ctx, &warnings)
 	snap.APIServices = c.collectAPIServices(ctx, &warnings)
-	snap.Deployments = c.collectDeployments(ctx, &warnings)
+	snap.Deployments = c.collectWorkloads(ctx, &warnings)
 	return snap, warnings
 }
 
@@ -194,25 +196,50 @@ func apiServiceAvailable(obj map[string]any) bool {
 	return true
 }
 
-func (c *Client) collectDeployments(ctx context.Context, warnings *[]error) []scan.Deployment {
-	items, err := c.dyn.Resource(depGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		*warnings = append(*warnings, fmt.Errorf("list Deployments: %w", err))
-		return nil
-	}
+// collectWorkloads lists every controller candidate: Deployments,
+// StatefulSets and DaemonSets. Some controllers are not Deployments at all; the
+// Argo CD application controller ships as a StatefulSet and the Velero node
+// agent as a DaemonSet.
+func (c *Client) collectWorkloads(ctx context.Context, warnings *[]error) []scan.Deployment {
 	var out []scan.Deployment
-	for i := range items.Items {
-		obj := items.Items[i].Object
-		replicas, _, _ := unstructured.NestedInt64(obj, "spec", "replicas")
-		ready, _, _ := unstructured.NestedInt64(obj, "status", "readyReplicas")
-		out = append(out, scan.Deployment{
-			Namespace:     items.Items[i].GetNamespace(),
-			Name:          items.Items[i].GetName(),
-			Replicas:      int32(replicas),
-			ReadyReplicas: int32(ready),
-		})
+	for _, w := range []struct {
+		gvr  schema.GroupVersionResource
+		kind string
+	}{{depGVR, "Deployment"}, {stsGVR, "StatefulSet"}, {dsGVR, "DaemonSet"}} {
+		items, err := c.dyn.Resource(w.gvr).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			*warnings = append(*warnings, fmt.Errorf("list %ss: %w", w.kind, err))
+			continue
+		}
+		for i := range items.Items {
+			out = append(out, workload(&items.Items[i], w.kind))
+		}
 	}
 	return out
+}
+
+// workload reads desired and ready counts. A DaemonSet has no spec.replicas;
+// its desired count is the number of nodes it should be scheduled on.
+func workload(u *unstructured.Unstructured, kind string) scan.Deployment {
+	var desired, ready int64
+	if kind == "DaemonSet" {
+		desired, _, _ = unstructured.NestedInt64(u.Object, "status", "desiredNumberScheduled")
+		ready, _, _ = unstructured.NestedInt64(u.Object, "status", "numberReady")
+	} else {
+		desired, _, _ = unstructured.NestedInt64(u.Object, "spec", "replicas")
+		ready, _, _ = unstructured.NestedInt64(u.Object, "status", "readyReplicas")
+	}
+	d := scan.Deployment{
+		Namespace:     u.GetNamespace(),
+		Name:          u.GetName(),
+		Replicas:      int32(desired),
+		ReadyReplicas: int32(ready),
+	}
+	// Deployments keep the empty kind so snapshots stay byte-compatible.
+	if kind != "Deployment" {
+		d.Kind = kind
+	}
+	return d
 }
 
 func contains(haystack []string, needle string) bool {

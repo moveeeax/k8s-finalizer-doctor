@@ -15,7 +15,8 @@ func TestWriteTableShowsVerdictsAndCommands(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		"OBJECT", "FINALIZER", "VERDICT", "ACTION", "OWNER",
+		"OBJECT", "FINALIZER", "VERDICT", "ACTION", "OWNER", "MATCHED-BY",
+		"builtin", "heuristic",
 		"Namespace/argocd",
 		"app Certificate/web-tls",
 		"owner-missing", "owner-unhealthy", "owner-healthy", "owner-builtin",
@@ -54,6 +55,13 @@ func TestWriteJSONRoundTrips(t *testing.T) {
 	}
 	if got.Scanned != 6 {
 		t.Errorf("scanned = %d, want 6", got.Scanned)
+	}
+	for _, f := range got.Findings {
+		for _, b := range f.Blockers {
+			if b.MatchedBy == "" {
+				t.Errorf("%s/%s %s: matchedBy is empty", f.Kind, f.Name, b.Finalizer)
+			}
+		}
 	}
 	if got.Findings[0].Namespace != "" || got.Findings[0].Name != "argocd" {
 		t.Errorf("findings are not sorted cluster-scoped first: %+v", got.Findings[0])

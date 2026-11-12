@@ -78,3 +78,34 @@ func TestContains(t *testing.T) {
 		t.Error("deletecollection should not be found")
 	}
 }
+
+// A DaemonSet has no spec.replicas. Reading it like a Deployment would report
+// every healthy node agent as 0/0 ready and blame it for a stuck delete.
+func TestWorkloadReadsDaemonSetCounts(t *testing.T) {
+	ds := obj(map[string]any{
+		"metadata": map[string]any{"namespace": "velero", "name": "node-agent"},
+		"status":   map[string]any{"desiredNumberScheduled": int64(3), "numberReady": int64(2)},
+	})
+	got := workload(ds, "DaemonSet")
+	if got.Kind != "DaemonSet" || got.Replicas != 3 || got.ReadyReplicas != 2 {
+		t.Errorf("daemonset = %+v, want DaemonSet 2/3", got)
+	}
+
+	sts := obj(map[string]any{
+		"metadata": map[string]any{"namespace": "argocd", "name": "argocd-application-controller"},
+		"spec":     map[string]any{"replicas": int64(1)},
+		"status":   map[string]any{"readyReplicas": int64(1)},
+	})
+	got = workload(sts, "StatefulSet")
+	if got.Kind != "StatefulSet" || got.Replicas != 1 || got.ReadyReplicas != 1 {
+		t.Errorf("statefulset = %+v, want StatefulSet 1/1", got)
+	}
+
+	dep := obj(map[string]any{
+		"metadata": map[string]any{"namespace": "cert-manager", "name": "cert-manager"},
+		"spec":     map[string]any{"replicas": int64(1)},
+	})
+	if got = workload(dep, "Deployment"); got.Kind != "" {
+		t.Errorf("deployment kind = %q, want empty so old snapshots stay identical", got.Kind)
+	}
+}
