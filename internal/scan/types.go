@@ -31,12 +31,31 @@ type APIService struct {
 	Available bool   `json:"available"`
 }
 
-// Deployment is a candidate controller workload.
+// Deployment is a candidate controller workload. Despite the name it also
+// carries StatefulSets and DaemonSets, which some controllers run as (the Argo
+// CD application controller is a StatefulSet); Kind tells them apart.
 type Deployment struct {
+	// Kind is "Deployment", "StatefulSet" or "DaemonSet". Empty means
+	// Deployment, so older snapshots keep loading.
+	Kind          string `json:"kind,omitempty"`
 	Namespace     string `json:"namespace"`
 	Name          string `json:"name"`
 	Replicas      int32  `json:"replicas"`
 	ReadyReplicas int32  `json:"readyReplicas"`
+}
+
+// KindName is the workload kind with the Deployment default applied.
+func (d Deployment) KindName() string {
+	if d.Kind == "" {
+		return "Deployment"
+	}
+	return d.Kind
+}
+
+// Label is the human form used as a Blocker owner, e.g.
+// "StatefulSet argocd/argocd-application-controller".
+func (d Deployment) Label() string {
+	return d.KindName() + " " + d.Namespace + "/" + d.Name
 }
 
 // Snapshot is everything the resolver needs. It is the on-disk fixture format
@@ -87,6 +106,10 @@ type Blocker struct {
 	// Owner is a human label for whoever is supposed to remove the finalizer,
 	// e.g. "CRD applications.argoproj.io" or "Deployment argocd/argocd-controller".
 	Owner string `json:"owner"`
+	// MatchedBy says how the owner was found: "config" (an --owners entry),
+	// "catalog" (the built-in owner map), "heuristic" (domain matching),
+	// "builtin" (a control-plane finalizer) or "none" (nothing to trace).
+	MatchedBy string `json:"matchedBy"`
 	// Reason explains the verdict in one sentence.
 	Reason string `json:"reason"`
 	// Warning is set for finalizers known to guard a real cloud resource, where

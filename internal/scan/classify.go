@@ -24,7 +24,6 @@ var builtinFinalizers = map[string]string{
 // paying for a load balancer nobody can find.
 var cloudWarnings = map[string]string{
 	"service.k8s.aws/resources":                   "may leak an AWS load balancer / target group",
-	"elbv2.k8s.aws/group":                         "may leak an AWS ALB and its listeners",
 	"service.kubernetes.io/load-balancer-cleanup": "may leak a cloud load balancer and its public IP",
 	"kubernetes.io/pv-protection":                 "may leak the backing disk if the PV is Retain",
 	"external-attacher/":                          "may leave a CSI volume attached to a dead node",
@@ -91,13 +90,17 @@ type resolver struct {
 	crdsByGroup map[string][]CRD
 	apisByGroup map[string][]APIService
 	deployments []Deployment
+	config      []Owner
+	catalog     []Owner
 }
 
-func newResolver(s Snapshot) *resolver {
+func newResolver(s Snapshot, config []Owner) *resolver {
 	r := &resolver{
 		crdsByGroup: map[string][]CRD{},
 		apisByGroup: map[string][]APIService{},
 		deployments: s.Deployments,
+		config:      config,
+		catalog:     catalog,
 	}
 	for _, c := range s.CRDs {
 		r.crdsByGroup[c.Group] = append(r.crdsByGroup[c.Group], c)
@@ -122,14 +125,85 @@ func (r *resolver) findDeployment(d string) (Deployment, bool) {
 	return Deployment{}, false
 }
 
+// findWorkload looks up the workload an owner entry names. The exact
+// namespace/name wins; failing that, the same name in any namespace, because
+// Helm charts are routinely installed somewhere other than their docs' default.
+func (r *resolver) findWorkload(o Owner) (Deployment, bool) {
+	ns, name := o.workloadRef()
+	if ns != "" {
+		for _, dep := range r.deployments {
+			if dep.Namespace == ns && dep.Name == name {
+				return dep, true
+			}
+		}
+	}
+	for _, dep := range r.deployments {
+		if dep.Name == name {
+			return dep, true
+		}
+	}
+	return Deployment{}, false
+}
+
+// ownerEntry picks the owner map entry for a finalizer: --owners entries
+// first, so a config file overrides the catalog, then the catalog. The second
+// result is the catalog entry alone, whose warning survives a config override
+// that sets no cloudLeak of its own.
+func (r *resolver) ownerEntry(obj Object, finalizer string) (entry Owner, source string, fromCatalog Owner, ok bool) {
+	fromCatalog, inCatalog := bestOwner(r.catalog, obj, finalizer)
+	if o, found := bestOwner(r.config, obj, finalizer); found {
+		return o, MatchedByConfig, fromCatalog, true
+	}
+	if inCatalog {
+		return fromCatalog, MatchedByCatalog, fromCatalog, true
+	}
+	return Owner{}, "", Owner{}, false
+}
+
+// workloadVerdict fills in the verdict for a finalizer whose controller
+// workload is known.
+func workloadVerdict(b *Blocker, dep Deployment) {
+	b.Owner = dep.Label()
+	if dep.ReadyReplicas == 0 {
+		b.Verdict = OwnerUnhealthy
+		b.Reason = fmt.Sprintf("controller has 0/%d ready replicas and will never clear this finalizer", dep.Replicas)
+		return
+	}
+	b.Verdict = OwnerHealthy
+	b.Reason = fmt.Sprintf("controller is up (%d/%d ready); it is still working or waiting on an external resource", dep.ReadyReplicas, dep.Replicas)
+}
+
 func (r *resolver) classify(obj Object, finalizer string) Blocker {
 	b := Blocker{Finalizer: finalizer, Warning: warningFor(finalizer)}
 
 	if owner, ok := builtinFinalizers[finalizer]; ok {
 		b.Verdict = OwnerBuiltin
 		b.Owner = "control plane"
+		b.MatchedBy = MatchedByBuiltin
 		b.Reason = "built-in finalizer held by " + owner
 		return b
+	}
+
+	// note is appended to the heuristic's reason when the owner map named a
+	// workload that is not in the cluster.
+	var note string
+	if entry, source, fromCatalog, ok := r.ownerEntry(obj, finalizer); ok {
+		switch {
+		case entry.CloudLeak != "":
+			b.Warning = entry.CloudLeak
+		case fromCatalog.CloudLeak != "":
+			b.Warning = fromCatalog.CloudLeak
+		}
+		if dep, found := r.findWorkload(entry); found {
+			b.MatchedBy = source
+			workloadVerdict(&b, dep)
+			return b
+		}
+		where := "built-in catalog"
+		if source == MatchedByConfig {
+			where = "--owners file"
+		}
+		note = fmt.Sprintf("; the %s expects %s, which is not in the cluster", where, entry.Workload)
 	}
 
 	dom := domain(finalizer)
@@ -138,10 +212,12 @@ func (r *resolver) classify(obj Object, finalizer string) Blocker {
 		// the owner is gone. Say so instead of guessing.
 		b.Verdict = OwnerHealthy
 		b.Owner = "unknown"
-		b.Reason = "finalizer has no domain, owner cannot be resolved automatically"
+		b.MatchedBy = MatchedByNone
+		b.Reason = "finalizer has no domain, owner cannot be resolved automatically" + note
 		return b
 	}
 
+	b.MatchedBy = MatchedByHeuristic
 	var apiOwner string
 	for _, suffix := range domainSuffixes(dom) {
 		if crds := r.crdsByGroup[suffix]; len(crds) > 0 {
@@ -152,7 +228,7 @@ func (r *resolver) classify(obj Object, finalizer string) Blocker {
 			if !apis[0].Available {
 				b.Verdict = OwnerUnhealthy
 				b.Owner = "APIService " + apis[0].Name
-				b.Reason = "the aggregated API serving this finalizer is not available"
+				b.Reason = "the aggregated API serving this finalizer is not available" + note
 				return b
 			}
 			apiOwner = "APIService " + apis[0].Name
@@ -162,24 +238,19 @@ func (r *resolver) classify(obj Object, finalizer string) Blocker {
 
 	dep, hasDep := r.findDeployment(dom)
 	switch {
-	case hasDep && dep.ReadyReplicas == 0:
-		b.Verdict = OwnerUnhealthy
-		b.Owner = fmt.Sprintf("Deployment %s/%s", dep.Namespace, dep.Name)
-		b.Reason = fmt.Sprintf("controller has 0/%d ready replicas and will never clear this finalizer", dep.Replicas)
 	case hasDep:
-		b.Verdict = OwnerHealthy
-		b.Owner = fmt.Sprintf("Deployment %s/%s", dep.Namespace, dep.Name)
-		b.Reason = fmt.Sprintf("controller is up (%d/%d ready); it is still working or waiting on an external resource", dep.ReadyReplicas, dep.Replicas)
+		workloadVerdict(&b, dep)
 	case apiOwner != "":
 		b.Verdict = OwnerHealthy
 		b.Owner = apiOwner
-		b.Reason = "the API that owns this finalizer is installed but no controller Deployment was matched"
+		b.Reason = "the API that owns this finalizer is installed but no controller workload was matched"
 	default:
 		b.Verdict = OwnerMissing
 		b.Owner = "none"
-		b.Reason = fmt.Sprintf("no CRD, APIService or Deployment matches %q; whatever set this finalizer is gone", dom)
+		b.Reason = fmt.Sprintf("no CRD, APIService or workload matches %q; whatever set this finalizer is gone", dom)
 		b.Remediation = RemediationCommand(obj, finalizer)
 	}
+	b.Reason += note
 	return b
 }
 
@@ -195,9 +266,14 @@ func warningFor(finalizer string) string {
 	return ""
 }
 
-// Resolve classifies every finalizer on every stuck object in the snapshot.
-func Resolve(s Snapshot) Report {
-	r := newResolver(s)
+// Resolve classifies every finalizer on every stuck object in the snapshot,
+// using the built-in owner catalog.
+func Resolve(s Snapshot) Report { return ResolveWithOwners(s, nil) }
+
+// ResolveWithOwners is Resolve with extra owner entries, typically from an
+// --owners file. They take precedence over the built-in catalog.
+func ResolveWithOwners(s Snapshot, owners []Owner) Report {
+	r := newResolver(s, owners)
 	rep := Report{Scanned: len(s.Objects), Findings: []Finding{}}
 	for _, obj := range s.Objects {
 		if len(obj.Finalizers) == 0 {

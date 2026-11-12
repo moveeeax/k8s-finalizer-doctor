@@ -1,0 +1,8 @@
+# Owner map for the tests and the README example. A finalizer here wins over
+# the built-in catalog.
+owners:
+  - finalizer: cleanup.platform.example.com
+    workload: infra/reaper
+    cloudLeak: may leak the DNS records the reaper manages
+  - finalizer: resources-finalizer.argocd.argoproj.io
+    workload: gitops/argo-app-controller

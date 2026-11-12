@@ -24,14 +24,14 @@ func WriteTable(w io.Writer, r Report) error {
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "OBJECT\tFINALIZER\tVERDICT\tACTION\tOWNER")
+	fmt.Fprintln(tw, "OBJECT\tFINALIZER\tVERDICT\tACTION\tOWNER\tMATCHED-BY")
 	for _, f := range r.Findings {
 		name := f.Kind + "/" + f.Name
 		if f.Namespace != "" {
 			name = f.Namespace + " " + name
 		}
 		for _, b := range f.Blockers {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, b.Finalizer, b.Verdict, b.Verdict.Action(), b.Owner)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, b.Finalizer, b.Verdict, b.Verdict.Action(), b.Owner, b.MatchedBy)
 		}
 	}
 	if err := tw.Flush(); err != nil {
